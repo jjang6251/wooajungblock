@@ -1,0 +1,42 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Login Dockerhub
+      
+      run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}      
+
+    - name: Build the Docker image
+      run: |
+        docker build --build-arg SECRET_KEY=${{secrets.SECRET_KEY}} --build-arg DB_HOST=${{secrets.DB_HOST}} --build-arg DB_USER=${{secrets.DB_USER}} --build-arg DB_PASSWORD=${{secrets.DB_PASSWORD}}  -t wooajungblock .
+
+    - name: taging
+      run: docker tag wooajungblock:latest ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+
+    - name: Push to Dockerhub
+      run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+    
+  deploy:
+
+    runs-on: self-hosted
+    needs: build
+
+    steps:
+    - name: Pull Docker image
+      run: sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+    - name: Delete Old docker container
+      run: sudo docker rm -f wooajungblock-container || true
+    - name: Run Docker Container
+      run: sudo docker run -d -p 3000:3000 --name wooajungblock-container ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock

@@ -14,7 +14,7 @@ export class BlockchainController {
     @Post('/coin_to_dollar')
     async coindollar(@Body() coindollar: CoinDollar, @Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.coindollar(userid, coindollar);
     }
 
@@ -22,7 +22,7 @@ export class BlockchainController {
     @Get('/coinBalance')
     async coinbalance(@Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.coinbalance(userid);
     }
 
@@ -30,7 +30,7 @@ export class BlockchainController {
     @Post('/create_escrow')
     async createEscrow(@Body() escrow: CreateEscrow, @Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.createEscrow(escrow);
     }
 
@@ -38,7 +38,7 @@ export class BlockchainController {
     @Get('/check_escrow')
     async checkEscrow(@Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.checkEscrow(userid);
     }
 
@@ -46,7 +46,7 @@ export class BlockchainController {
     @Post('/delete_escrow')
     async deleteEscro(@Body('escrowId') escrowId: string, @Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.approveEscrowDeletion(userid, escrowId);
     }
 
@@ -54,7 +54,7 @@ export class BlockchainController {
     @Post('/withdraw')
     async withdrawEscro(@Body('escrowId') escrowId: string, @Req() request) {
         const user = request.user;
-        const userid = user.user_id;
+        const userid = user.nickname;
         return this.blockService.processEscrowWithdrawal(userid, escrowId);
     }
 }

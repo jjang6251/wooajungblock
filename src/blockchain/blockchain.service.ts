@@ -260,6 +260,26 @@ export class BlockchainService {
             if (updatedEscrow.deleteBuyerApproved && updatedEscrow.deleteSellerApproved) {
                 bothApproved = true;
 
+                // 먼저 현재 판매자의 블록체인 정보를 조회
+                const sellerBlockchain = await queryRunner.manager.findOneBy(Blockchain, {
+                    userId: updatedEscrow.buyer
+                });
+
+                if (!sellerBlockchain) {
+                    throw new HttpException('판매자의 블록체인 정보를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+                }
+
+                // 기존 토큰에 에스크로 토큰 더하기
+                const updatedTokenAmount = sellerBlockchain.token + updatedEscrow.token;
+                console.log(updatedTokenAmount);
+
+                // 업데이트 실행
+                await queryRunner.manager.update(
+                    Blockchain,
+                    { userId: updatedEscrow.buyer },
+                    { token: updatedTokenAmount }
+                );
+
                 // 에스크로 데이터 완전히 삭제
                 await queryRunner.manager.delete(Escrow, { id: escrowId });
             }

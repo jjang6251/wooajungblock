@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 import { Blockchain } from './blockchain/entity/blockchain.entity';
 import { Escrow } from './blockchain/entity/create-escrow.entity';
 import { Junggo } from './junggo/entity/create-junggo.entity';
+import { Declaration } from './blockchain/entity/declaration.entity';
 
 dotenv.config();
 
@@ -14,6 +15,6 @@ export const typeORMConfig: TypeOrmModuleOptions = {
   username: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: 'wooajeong',
-  entities: [Blockchain, Escrow, Junggo],
+  entities: [Blockchain, Escrow, Junggo, Declaration],
   synchronize: true,
 };

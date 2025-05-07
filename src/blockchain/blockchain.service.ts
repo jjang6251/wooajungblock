@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { CreateEscrow } from './dto/askro.dto';
 import { Escrow } from './entity/create-escrow.entity';
+import { Declaration } from './entity/declaration.entity';
 
 @Injectable()
 export class BlockchainService {
@@ -12,6 +13,7 @@ export class BlockchainService {
     constructor(@InjectRepository(Blockchain) private blockRepository: Repository<Blockchain>,
         @InjectRepository(Escrow)
         private escrowRepository: Repository<Escrow>,
+        @InjectRepository(Declaration) private declarationRepository: Repository<Declaration>,
         private dataSource: DataSource  // Connection 대신 DataSource 사용
     ) { }
 
@@ -442,6 +444,139 @@ export class BlockchainService {
         }
     }
 
+    //(에스크로) 신고
+    async declaration(userid, escrowId: string, declaration: string) {
+        const userId = userid;
+        // 트랜잭션 시작
+        const queryRunner = this.dataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+            // 에스크로 조회 - TypeORM 최신 문법 사용
+            const escrow = await queryRunner.manager.findOneBy(Escrow, {
+                id: escrowId
+            });
+
+            // 에스크로가 존재하지 않는 경우
+            if (!escrow) {
+                throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+            }
+
+            // 요청한 사용자가 해당 에스크로의 참여자(구매자 또는 판매자)인지 확인
+            if (escrow.buyer !== userId && escrow.seller !== userId) {
+                throw new HttpException('이 에스크로에 대한 권한이 없습니다.', HttpStatus.FORBIDDEN);
+            }
+
+
+            // 에스크로 업데이트
+            await queryRunner.manager.update(
+                Escrow,
+                { id: escrowId },
+                {status: 'declaration'}
+            );
+
+
+            const declaration_data = await queryRunner.manager.create(
+                Declaration,
+                {
+                    userId: userid,
+                    escrowId: escrowId,
+                    declaration: declaration
+                }
+            );
+
+            await queryRunner.manager.save(Declaration, declaration_data);
+
+            // 트랜잭션 커밋
+            await queryRunner.commitTransaction();
+
+            return {
+                statusCode: HttpStatus.OK,
+                message: '신고 완료되었습니다.',
+            };
+
+        } catch (error) {
+            // 에러 발생 시 롤백
+            await queryRunner.rollbackTransaction();
+
+            // 에러가 HttpException이면 그대로 전달
+            if (error instanceof HttpException) {
+                throw error;
+            }
+
+            console.error('에스크로 신고 처리 실패:', error);
+            throw new HttpException(
+                '에스크로 신고 처리 중 오류가 발생했습니다: ' + (error.message || '알 수 없는 오류'),
+                HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        } finally {
+            // 쿼리 러너 해제
+            await queryRunner.release();
+        }
+    }
+
+    //(에스크로) 신고 취하
+    async withdraw_declaration(userid: string, escrowId: string) {
+        const queryRunner = this.dataSource.createQueryRunner();
+    
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+    
+        try {
+            // 1️⃣ 에스크로 조회
+            const escrow = await queryRunner.manager.findOneBy(Escrow, { id: escrowId });
+    
+            if (!escrow) {
+                throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+            }
+    
+            // 2️⃣ 신고 정보 조회
+            const declaration = await queryRunner.manager.findOneBy(Declaration, { escrowId });
+    
+            if (!declaration) {
+                throw new HttpException('해당 에스크로의 신고를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+            }
+    
+            // 3️⃣ 신고자 본인 여부 확인
+            if (userid !== declaration.userId) {
+                throw new HttpException('신고 철회 권한이 없습니다.', HttpStatus.FORBIDDEN);
+            }
+    
+            // 4️⃣ 에스크로 상태 초기화
+            await queryRunner.manager.update(
+                Escrow,
+                { id: escrowId },
+                { status: 'create' }
+            );
+    
+            // 5️⃣ 신고 기록 삭제
+            await queryRunner.manager.delete(Declaration, { escrowId });
+    
+            // 6️⃣ 트랜잭션 커밋
+            await queryRunner.commitTransaction();
+    
+            return { message: '신고 철회가 완료되었습니다.' };
+    
+        } catch (error) {
+            // 트랜잭션 롤백
+            await queryRunner.rollbackTransaction();
+    
+            if (error instanceof HttpException) {
+                throw error;
+            }
+    
+            console.error('에스크로 신고 철회 실패:', error);
+            throw new HttpException(
+                `에스크로 신고 철회 중 오류 발생: ${error.message || '알 수 없는 오류'}`,
+                HttpStatus.INTERNAL_SERVER_ERROR
+            );
+    
+        } finally {
+            // 커넥션 해제
+            await queryRunner.release();
+        }
+    }
     //
     findOne(userId: string) {
         return this.blockRepository.findOne({ where: { userId } });

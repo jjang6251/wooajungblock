@@ -57,4 +57,20 @@ export class BlockchainController {
         const userid = user.nickname;
         return this.blockService.processEscrowWithdrawal(userid, escrowId);
     }
+
+    //에스크로 신고
+    @Post('/declaration')
+    async declare(@Body('escrowId') escrowId: string,@Body('declaration') declaration: string, @Req() request) {
+        const user = request.user;
+        const userid = user.nickname;
+        return this.blockService.declaration(userid, escrowId, declaration);
+    }
+
+    //에스크로 신고 취하
+    @Post('/withdraw_declaration')
+    async withdrawDeclare(@Body('escrowId') escrowId: string, @Req() request) {
+        const user = request.user;
+        const userid = user.nickname;
+        return this.blockService.withdraw_declaration(userid, escrowId);
+    }
 }

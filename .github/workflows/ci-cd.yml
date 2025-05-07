@@ -60,6 +60,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
       
       - name: Copy gcp.json
-        run: sudo docker cp /home/gcp.json wooajungblock-container:/app/gcp.json
+        run: sudo docker cp /home/wooajungg/gcp.json wooajungblock-container:/app/gcp.json
 
         

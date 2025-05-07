@@ -49,4 +49,16 @@ export class JunggoController {
         const userid = user.nickname;
         return await this.junggoService.delete_junggo(userid, product_id);
     }
+
+    //물품 수정
+    @UseGuards(AuthGuard)
+    @Post('modify')
+    @UseInterceptors(FileInterceptor('file'))
+    async modifyFile(@UploadedFile() file: Express.Multer.File, @Body() modifyJunggo: CreateJunggo, @Req() request, @Body('product_id') product_id: string) {
+
+        const productId = Number(product_id);
+        const user = request.user;
+        const userid = user.nickname;
+        return await this.junggoService.modify_junggo(file, modifyJunggo, userid, productId);
+    }
 }

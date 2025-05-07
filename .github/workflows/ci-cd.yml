@@ -7,36 +7,55 @@ on:
     branches: [ "main" ]
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Login Dockerhub
-      
-      run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}      
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Build the Docker image
-      run: |
-        docker build --build-arg SECRET_KEY=${{secrets.SECRET_KEY}} --build-arg DB_HOST=${{secrets.DB_HOST}} --build-arg DB_USER=${{secrets.DB_USER}} --build-arg DB_PASSWORD=${{secrets.DB_PASSWORD}}  -t wooajungblock .
+      - name: Login to DockerHub
+        run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
 
-    - name: taging
-      run: docker tag wooajungblock:latest ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+      - name: Build the Docker image
+        run: |
+          docker build \
+            --build-arg SECRET_KEY=${{ secrets.SECRET_KEY }} \
+            --build-arg DB_HOST=${{ secrets.DB_HOST }} \
+            --build-arg DB_USER=${{ secrets.DB_USER }} \
+            --build-arg DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+            -t wooajungblock .
 
-    - name: Push to Dockerhub
-      run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
-    
+      - name: Tag the Docker image
+        run: docker tag wooajungblock:latest ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+
+      - name: Push Docker image to DockerHub
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+
   deploy:
-
     runs-on: self-hosted
     needs: build
 
     steps:
-    - name: Pull Docker image
-      run: sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
-    - name: Delete Old docker container
-      run: sudo docker rm -f wooajungblock-container || true
-    - name: Run Docker Container
-      run: sudo docker run -d -p 3000:3000 -v /home/wooajungg/gcp.json:/app/gcp.json --name wooajungblock-container ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock
+      - name: Debug file existence
+        run: |
+          echo "Current working directory:"
+          pwd
+          echo "Listing /home/wooajungg:"
+          ls -l /home/wooajungg
+          echo "Checking file directly:"
+          cat /home/wooajungg/gcp.json || echo "Cannot read file"
+
+      - name: Pull Docker image
+        run: sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest
+
+      - name: Delete old Docker container (if exists)
+        run: sudo docker rm -f wooajungblock-container || true
+
+      - name: Run new Docker container
+        run: |
+          sudo docker run -d \
+            -p 3000:3000 \
+            -v $(pwd)/gcp.json:/app/gcp.json \
+            --name wooajungblock-container \
+            ${{ secrets.DOCKERHUB_USERNAME }}/wooajungblock:latest

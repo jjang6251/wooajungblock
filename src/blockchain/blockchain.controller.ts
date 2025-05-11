@@ -58,7 +58,7 @@ export class BlockchainController {
         return this.blockService.processEscrowWithdrawal(userid, escrowId);
     }
 
-    //에스크로 신고
+    //에스크로 신고/
     @Post('/declaration')
     async declare(@Body('escrowId') escrowId: string,@Body('declaration') declaration: string, @Req() request) {
         const user = request.user;

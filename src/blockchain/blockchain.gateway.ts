@@ -13,7 +13,8 @@ import { Repository } from 'typeorm';
     methods: ['GET', 'POST'], // 허용할 HTTP 메서드
     allowedHeaders: ['Content-Type'], // 허용할 HTTP 헤더
     credentials: true // 쿠키를 포함한 요청을 허용
-  }
+  },
+  transports: ['websocket', 'polling']
 })
 export class TokenGateway implements OnGatewayConnection, OnGatewayDisconnect {
 

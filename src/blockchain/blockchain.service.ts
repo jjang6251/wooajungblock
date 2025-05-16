@@ -6,6 +6,8 @@ import { DataSource, In, Repository } from 'typeorm';
 import { CreateEscrow } from './dto/askro.dto';
 import { Escrow } from './entity/create-escrow.entity';
 import { Declaration } from './entity/declaration.entity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { TOKEN_EVENTS } from './blockchain.events';
 
 @Injectable()
 export class BlockchainService {
@@ -14,38 +16,88 @@ export class BlockchainService {
         @InjectRepository(Escrow)
         private escrowRepository: Repository<Escrow>,
         @InjectRepository(Declaration) private declarationRepository: Repository<Declaration>,
-        private dataSource: DataSource  // Connection 대신 DataSource 사용
+        private dataSource: DataSource,  // Connection 대신 DataSource 사용
+        private eventEmitter: EventEmitter2
     ) { }
 
-    //현금 -> coin
+    //현금 -> coin -- 수정
     async coindollar(userid, coindollar: CoinDollar) {
         const existingUser = await this.findOne(userid);
-
-        if (existingUser) {
-            // 기존 사용자가 있는 경우 토큰 값만 업데이트
-            await this.blockRepository.update(
-                { userId: userid }, // 조건 (WHERE)
-                { token: existingUser.token + coindollar.token } // 업데이트할 필드 (SET)
-            );
-
-            // 성공 메시지 반환
-            throw new HttpException('토큰이 업데이트 되었습니다.', HttpStatus.OK);
+        const operator = await this.findOne("운영자");
+    
+        if (existingUser && operator) {
+            if (operator.token < coindollar.token) {
+                throw new HttpException('토큰을 발행할 수 없습니다.', HttpStatus.BAD_REQUEST);
+            }
+    
+            // 트랜잭션 시작
+            const queryRunner = this.dataSource.createQueryRunner();
+            await queryRunner.connect();
+            await queryRunner.startTransaction();
+    
+            try {
+                // 운영자 토큰 차감
+                await queryRunner.manager.update(
+                    Blockchain,
+                    { userId: "운영자" },
+                    { token: operator.token - coindollar.token }
+                );
+    
+                // 사용자 토큰 증가
+                await queryRunner.manager.update(
+                    Blockchain,
+                    { userId: userid },
+                    { token: existingUser.token + coindollar.token }
+                );
+    
+                // 트랜잭션 커밋
+                await queryRunner.commitTransaction();
+    
+                // 성공 후 이벤트 발생
+                this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
+    
+                // 성공 응답 반환
+                return {
+                    statusCode: HttpStatus.OK,
+                    message: '토큰이 업데이트 되었습니다.',
+                    data: {
+                        userId: userid,
+                        token: existingUser.token + coindollar.token
+                    }
+                };
+            } catch (error) {
+                // 오류 발생 시 롤백
+                await queryRunner.rollbackTransaction();
+                throw new HttpException('토큰 업데이트에 실패했습니다.', HttpStatus.INTERNAL_SERVER_ERROR);
+            } finally {
+                // 쿼리 러너 해제
+                await queryRunner.release();
+            }
         }
-
+    
+        // 사용자가 존재하지 않는 경우 새로 생성
         const saveData = {
             userId: userid,
             token: coindollar.token
-        }
-
+        };
+    
         try {
             // 데이터베이스에 저장을 시도합니다.
             const newMember = this.blockRepository.create(saveData);
             await this.blockRepository.save(newMember);
+            
+            // 성공 후 이벤트 발생
+            this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
+            
+            return {
+                statusCode: HttpStatus.CREATED,
+                message: '토큰 저장 완료.',
+                data: saveData
+            };
         } catch (error) {
             // 저장이 실패한 경우 500 Internal Server Error 상태 코드와 함께 메시지를 반환합니다.
             throw new HttpException('토큰 저장에 실패했습니다.', HttpStatus.INTERNAL_SERVER_ERROR);
         }
-        throw new HttpException('토큰 저장 완료.', HttpStatus.CREATED);
     }
 
     //코인잔액 조회
@@ -67,7 +119,7 @@ export class BlockchainService {
         }
     }
 
-    //(에스크로) 생성
+    //(에스크로) 생성 -- 수정2
     async createEscrow(escrow: CreateEscrow) {
         // 1. 입력 데이터 검증
         if (!escrow.buyer || !escrow.seller || !escrow.product || escrow.token <= 0) {
@@ -78,6 +130,12 @@ export class BlockchainService {
         const users = await this.blockRepository.find({
             where: { userId: In([escrow.buyer, escrow.seller]) }
         });
+
+        const operator = await this.findOne("운영자");
+
+        if (!operator) {
+            throw new HttpException('운영자의 지갑이 존재하지 않습니다.', HttpStatus.BAD_REQUEST);
+        }
 
         // 3. 결과 맵핑 (조회 결과를 객체로 변환하여 접근성 향상)
         const userMap = users.reduce((map, user) => {
@@ -119,6 +177,13 @@ export class BlockchainService {
                 { token: buyer.token - escrow.token }
             );
 
+            // 운영자 지갑으로 토큰 이동
+            await queryRunner.manager.update(
+                Blockchain,
+                { userId: "운영자" },
+                { token: operator.token + escrow.token }
+            )
+
             // 에스크로 엔티티 생성 및 저장
             const escrowEntity = {
                 ...escrow,
@@ -133,6 +198,9 @@ export class BlockchainService {
 
             // 트랜잭션 커밋
             await queryRunner.commitTransaction();
+
+            // 성공 후 이벤트 발생
+            this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
 
             // 생성된 에스크로 정보 반환
             return {
@@ -204,7 +272,7 @@ export class BlockchainService {
         }
     }
 
-    //(에스크로) 삭제 (판매자/구매자 동의 있어야 삭제됨)
+    //(에스크로) 삭제 (판매자/구매자 동의 있어야 삭제됨) -- 수정2
     async approveEscrowDeletion(userid, escrowId: string) {
         const userId = userid;
         // 트랜잭션 시작
@@ -217,6 +285,14 @@ export class BlockchainService {
             const escrow = await queryRunner.manager.findOneBy(Escrow, {
                 id: escrowId
             });
+
+            const operator = await queryRunner.manager.findOneBy(Blockchain, {
+                userId: "운영자"
+            });
+
+            if (!operator) {
+                throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+            }
 
             // 에스크로가 존재하지 않는 경우
             if (!escrow) {
@@ -275,6 +351,18 @@ export class BlockchainService {
                 const updatedTokenAmount = sellerBlockchain.token + updatedEscrow.token;
                 console.log(updatedTokenAmount);
 
+                const updateOperator = operator.token - updatedEscrow.token;
+
+                if (updateOperator < 0) {
+                    throw new HttpException('운영자의 지갑에 토큰이 부족합니다.', HttpStatus.BAD_REQUEST);
+                }
+
+                await queryRunner.manager.update(
+                    Blockchain,
+                    { userId: "운영자" },
+                    { token: updateOperator }
+                );
+
                 // 업데이트 실행
                 await queryRunner.manager.update(
                     Blockchain,
@@ -282,12 +370,16 @@ export class BlockchainService {
                     { token: updatedTokenAmount }
                 );
 
+
                 // 에스크로 데이터 완전히 삭제
                 await queryRunner.manager.delete(Escrow, { id: escrowId });
             }
 
             // 트랜잭션 커밋
             await queryRunner.commitTransaction();
+
+            // 성공 후 이벤트 발생
+            this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
 
             return {
                 statusCode: HttpStatus.OK,
@@ -325,7 +417,7 @@ export class BlockchainService {
         }
     }
 
-    //(에스크로) 출금
+    //(에스크로) 출금 -- 수정2
     async processEscrowWithdrawal(userid, escrowId: string) {
 
         const userId = userid;
@@ -340,6 +432,14 @@ export class BlockchainService {
                 id: escrowId
             });
 
+            const operator = await queryRunner.manager.findOneBy(Blockchain, {
+                userId: "운영자"
+            });
+
+            if (!operator) {
+                throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
+            }
+
             // 에스크로가 존재하지 않는 경우
             if (!escrow) {
                 throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
@@ -353,6 +453,7 @@ export class BlockchainService {
             // 사용자 역할 확인
             if (escrow.buyer === userId) {
                 // 구매자인 경우 - withdrawBuyerApproved를 true로 설정
+
                 await queryRunner.manager.update(
                     Escrow,
                     { id: escrowId },
@@ -395,6 +496,18 @@ export class BlockchainService {
                     );
                 }
 
+                const updateOperator = operator.token - escrow.token;
+
+                if (updateOperator < 0) {
+                    throw new HttpException('운영자의 지갑에 토큰이 부족합니다.', HttpStatus.BAD_REQUEST);
+                }
+
+                await queryRunner.manager.update(
+                    Blockchain,
+                    { userId: operator.userId },
+                    { token: updateOperator }
+                );
+
                 // 판매자의 토큰 업데이트
                 await queryRunner.manager.update(
                     Blockchain,
@@ -411,6 +524,9 @@ export class BlockchainService {
                 );
 
                 await queryRunner.commitTransaction();
+
+                // 성공 후 이벤트 발생
+                this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
 
                 return {
                     statusCode: HttpStatus.OK,
@@ -473,7 +589,7 @@ export class BlockchainService {
             await queryRunner.manager.update(
                 Escrow,
                 { id: escrowId },
-                {status: 'declaration'}
+                { status: 'declaration' }
             );
 
 
@@ -519,59 +635,59 @@ export class BlockchainService {
     //(에스크로) 신고 취하
     async withdraw_declaration(userid: string, escrowId: string) {
         const queryRunner = this.dataSource.createQueryRunner();
-    
+
         await queryRunner.connect();
         await queryRunner.startTransaction();
-    
+
         try {
             // 1️⃣ 에스크로 조회
             const escrow = await queryRunner.manager.findOneBy(Escrow, { id: escrowId });
-    
+
             if (!escrow) {
                 throw new HttpException('에스크로를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
             }
-    
+
             // 2️⃣ 신고 정보 조회
             const declaration = await queryRunner.manager.findOneBy(Declaration, { escrowId });
-    
+
             if (!declaration) {
                 throw new HttpException('해당 에스크로의 신고를 찾을 수 없습니다.', HttpStatus.NOT_FOUND);
             }
-    
+
             // 3️⃣ 신고자 본인 여부 확인
             if (userid !== declaration.userId) {
                 throw new HttpException('신고 철회 권한이 없습니다.', HttpStatus.FORBIDDEN);
             }
-    
+
             // 4️⃣ 에스크로 상태 초기화
             await queryRunner.manager.update(
                 Escrow,
                 { id: escrowId },
                 { status: 'create' }
             );
-    
+
             // 5️⃣ 신고 기록 삭제
             await queryRunner.manager.delete(Declaration, { escrowId });
-    
+
             // 6️⃣ 트랜잭션 커밋
             await queryRunner.commitTransaction();
-    
+
             return { message: '신고 철회가 완료되었습니다.' };
-    
+
         } catch (error) {
             // 트랜잭션 롤백
             await queryRunner.rollbackTransaction();
-    
+
             if (error instanceof HttpException) {
                 throw error;
             }
-    
+
             console.error('에스크로 신고 철회 실패:', error);
             throw new HttpException(
                 `에스크로 신고 철회 중 오류 발생: ${error.message || '알 수 없는 오류'}`,
                 HttpStatus.INTERNAL_SERVER_ERROR
             );
-    
+
         } finally {
             // 커넥션 해제
             await queryRunner.release();

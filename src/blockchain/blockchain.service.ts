@@ -21,70 +21,99 @@ export class BlockchainService {
     ) { }
 
     //현금 -> coin -- 수정
-    async coindollar(userid, coindollar: CoinDollar) {
-        const existingUser = await this.findOne(userid);
-        const operator = await this.findOne("운영자");
+   async coindollar(userid, coindollar: CoinDollar) {
+    // 트랜잭션 시작
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
     
-        if (existingUser && operator) {
-            if (operator.token < coindollar.token) {
-                throw new HttpException('토큰을 발행할 수 없습니다.', HttpStatus.BAD_REQUEST);
-            }
-    
-            // 트랜잭션 시작
-            const queryRunner = this.dataSource.createQueryRunner();
-            await queryRunner.connect();
-            await queryRunner.startTransaction();
-    
-            try {
-                // 운영자 토큰 차감
-                await queryRunner.manager.update(
-                    Blockchain,
-                    { userId: "운영자" },
-                    { token: operator.token - coindollar.token }
-                );
-    
-                // 사용자 토큰 증가
-                await queryRunner.manager.update(
-                    Blockchain,
-                    { userId: userid },
-                    { token: existingUser.token + coindollar.token }
-                );
-    
-                // 트랜잭션 커밋
-                await queryRunner.commitTransaction();
-    
-                // 성공 후 이벤트 발생
-                this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
-    
-                // 성공 응답 반환
-                return {
-                    statusCode: HttpStatus.OK,
-                    message: '토큰이 업데이트 되었습니다.',
-                    data: {
-                        userId: userid,
-                        token: existingUser.token + coindollar.token
-                    }
-                };
-            } catch (error) {
-                // 오류 발생 시 롤백
-                await queryRunner.rollbackTransaction();
-                throw new HttpException('토큰 업데이트에 실패했습니다.', HttpStatus.INTERNAL_SERVER_ERROR);
-            } finally {
-                // 쿼리 러너 해제
-                await queryRunner.release();
-            }
+    try {
+        // 사용자와 운영자 조회를 트랜잭션 내에서 수행
+        const existingUser = await queryRunner.manager.findOne(Blockchain, { where: { userId: userid } });
+        const operator = await queryRunner.manager.findOne(Blockchain, { where: { userId: "운영자" } });
+        
+        if (!operator) {
+            throw new HttpException('운영자 계정이 존재하지 않습니다.', HttpStatus.NOT_FOUND);
         }
-    
-        // 사용자가 존재하지 않는 경우 새로 생성
-        const saveData = {
-            userId: userid,
-            token: coindollar.token
+        
+        if (operator.token < coindollar.token) {
+            throw new HttpException('토큰을 발행할 수 없습니다.', HttpStatus.BAD_REQUEST);
+        }
+        
+        // 블록체인 네트워크 요청
+        const url = 'http://34.123.65.160:3001/transfer';
+        const payload = {
+            to: "0x3e5aa75A1846BdA89669D78fbe8C1719eBE0586D",
+            amount: "1000000000000000000"
         };
-    
-        try {
-            // 데이터베이스에 저장을 시도합니다.
-            const newMember = this.blockRepository.create(saveData);
-            await this.blockRepository.save(newMember);
+        
+        
+        
+        if (existingUser) {
+            // 사용자가 존재하는 경우 토큰 업데이트
+            
+            // 운영자 토큰 차감
+            await queryRunner.manager.update(
+                Blockchain,
+                { userId: "운영자" },
+                { token: operator.token - coindollar.token }
+            );
+            
+            // 사용자 토큰 증가
+            await queryRunner.manager.update(
+                Blockchain,
+                { userId: userid },
+                { token: existingUser.token + coindollar.token }
+            );
+            
+            // 트랜잭션 커밋
+            await queryRunner.commitTransaction();
+            
+            // 성공 후 이벤트 발생
+            
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.status !== 200) {
+                throw new HttpException('블록체인 네트워크 오류', HttpStatus.BAD_REQUEST);
+            }
+
+            this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
+            
+            return {
+                statusCode: HttpStatus.OK,
+                message: '토큰이 업데이트 되었습니다.',
+                data: {
+                    userId: userid,
+                    token: existingUser.token + coindollar.token
+                }
+            };
+        } else {
+            // 사용자가 존재하지 않는 경우 새로 생성
+            const saveData = {
+                userId: userid,
+                token: coindollar.token
+            };
+            
+            // 운영자 토큰 차감
+            await queryRunner.manager.update(
+                Blockchain,
+                { userId: "운영자" },
+                { token: operator.token - coindollar.token }
+            );
+            
+            // 새 사용자 생성
+            const newUser = queryRunner.manager.create(Blockchain, saveData);
+            await queryRunner.manager.save(newUser);
+            
+            // 트랜잭션 커밋
+            await queryRunner.commitTransaction();
             
             // 성공 후 이벤트 발생
             this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
@@ -94,12 +123,22 @@ export class BlockchainService {
                 message: '토큰 저장 완료.',
                 data: saveData
             };
-        } catch (error) {
-            // 저장이 실패한 경우 500 Internal Server Error 상태 코드와 함께 메시지를 반환합니다.
-            throw new HttpException('토큰 저장에 실패했습니다.', HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    } catch (error) {
+        // 오류 발생 시 롤백
+        await queryRunner.rollbackTransaction();
+        
+        if (error instanceof HttpException) {
+            throw error; // 이미 HttpException인 경우 그대로 던짐
+        }
+        
+        // 기타 오류는 서버 내부 오류로 처리
+        throw new HttpException('토큰 업데이트에 실패했습니다: ' + error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    } finally {
+        // 쿼리 러너 해제
+        await queryRunner.release();
     }
-
+}
     //코인잔액 조회
     async coinbalance(userid) {
         try {
@@ -121,6 +160,14 @@ export class BlockchainService {
 
     //(에스크로) 생성 -- 수정2
     async createEscrow(escrow: CreateEscrow) {
+        const url = 'http://34.31.81.20:3001/create-escrow';
+
+        const payload = {
+            buyer: "0x3e5aa75A1846BdA89669D78fbe8C1719eBE0586D",
+            seller: "0xf9F603877A66290541Be631529090Be1dd746C64",
+            token: "0x7169D38820dfd117C3FA1f22a697dBA58d90BA06",
+            amount: "1000000000000000000"
+        };
         // 1. 입력 데이터 검증
         if (!escrow.buyer || !escrow.seller || !escrow.product || escrow.token <= 0) {
             throw new HttpException('필수 입력 데이터가 누락되었거나 유효하지 않습니다.', HttpStatus.BAD_REQUEST);
@@ -199,6 +246,18 @@ export class BlockchainService {
             // 트랜잭션 커밋
             await queryRunner.commitTransaction();
 
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.status !== 200) {
+                throw new HttpException('블록체인 네트워크 오류', HttpStatus.BAD_REQUEST);
+            }
+
             // 성공 후 이벤트 발생
             this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
 
@@ -275,6 +334,14 @@ export class BlockchainService {
     //(에스크로) 삭제 (판매자/구매자 동의 있어야 삭제됨) -- 수정2
     async approveEscrowDeletion(userid, escrowId: string) {
         const userId = userid;
+        const url = 'http://34.31.81.20:3001/create-escrow';
+
+        const payload = {
+            buyer: "0x3e5aa75A1846BdA89669D78fbe8C1719eBE0586D",
+            seller: "0xf9F603877A66290541Be631529090Be1dd746C64",
+            token: "0x7169D38820dfd117C3FA1f22a697dBA58d90BA06",
+            amount: "1000000000000000000"
+        };
         // 트랜잭션 시작
         const queryRunner = this.dataSource.createQueryRunner();
         await queryRunner.connect();
@@ -378,6 +445,18 @@ export class BlockchainService {
             // 트랜잭션 커밋
             await queryRunner.commitTransaction();
 
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.status !== 200) {
+                throw new HttpException('블록체인 네트워크 오류', HttpStatus.BAD_REQUEST);
+            }
+
             // 성공 후 이벤트 발생
             this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);
 
@@ -421,6 +500,14 @@ export class BlockchainService {
     async processEscrowWithdrawal(userid, escrowId: string) {
 
         const userId = userid;
+        const url = 'http://34.31.81.20:3001/create-escrow';
+
+        const payload = {
+            buyer: "0x3e5aa75A1846BdA89669D78fbe8C1719eBE0586D",
+            seller: "0xf9F603877A66290541Be631529090Be1dd746C64",
+            token: "0x7169D38820dfd117C3FA1f22a697dBA58d90BA06",
+            amount: "1000000000000000000"
+        };
         // 트랜잭션 시작
         const queryRunner = this.dataSource.createQueryRunner();
         await queryRunner.connect();
@@ -524,6 +611,18 @@ export class BlockchainService {
                 );
 
                 await queryRunner.commitTransaction();
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (response.status !== 200) {
+                    throw new HttpException('블록체인 네트워크 오류', HttpStatus.BAD_REQUEST);
+                }
 
                 // 성공 후 이벤트 발생
                 this.eventEmitter.emit(TOKEN_EVENTS.TOKEN_CHANGED);

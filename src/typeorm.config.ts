@@ -16,5 +16,5 @@ export const typeORMConfig: TypeOrmModuleOptions = {
   password: process.env.DB_PASSWORD,
   database: 'wooajeong',
   entities: [Blockchain, Escrow, Junggo, Declaration],
-  synchronize: false,
+  synchronize: false, 
 };

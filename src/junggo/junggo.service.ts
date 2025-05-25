@@ -20,7 +20,7 @@ export class JunggoService {
       imgUrl = await this.gcsConfigure.uploadFile(file);
     } catch (err) {
       throw new HttpException(`이미지 업로드에 실패했습니다: ${err.message}`, HttpStatus.BAD_REQUEST);
-    }
+    } 
 
     const junggoData = {
       ...createJunggo,
